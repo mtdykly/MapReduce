@@ -4,8 +4,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import mr.Mapper;
-import mr.Pair;
+import distributed.Mapper;
+import distributed.Pair;
 
 public class WordCountMapper implements Mapper<String, Integer> {
 

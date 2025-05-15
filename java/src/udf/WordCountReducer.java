@@ -2,8 +2,8 @@ package udf;
 
 import java.util.List;
 
-import mr.Pair;
-import mr.Reducer;
+import distributed.Pair;
+import distributed.Reducer;
 
 public class WordCountReducer implements Reducer<String, Integer, String, Integer> {
 

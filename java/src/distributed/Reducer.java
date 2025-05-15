@@ -1,4 +1,4 @@
-package mr;
+package distributed;
 
 import java.util.List;
 
