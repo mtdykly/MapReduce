@@ -15,7 +15,6 @@
 1. **心跳机制**：TaskTracker定期（每5秒）向JobTracker发送心跳消息，报告自身状态
 2. **任务状态管理**：任务在执行过程中有四种状态：PENDING（等待执行）、RUNNING（执行中）、COMPLETED（已完成）和FAILED（失败）
 3. **容错处理**：JobTracker通过心跳监控TaskTracker的状态，如果15秒内未收到心跳，则认为TaskTracker已经离线
-4. **动态任务分配**：JobTracker根据TaskTracker的状态（IDLE或BUSY）动态分配任务
 
 ## 运行流程
 
@@ -58,13 +57,13 @@ java -cp target distributed.TaskTracker 9002
 
 #### 启动多个TaskTracker
 
-您可以启动多个TaskTracker实例，每个使用不同的端口：
+可以启动多个TaskTracker实例，每个使用不同的端口：
 
 ```bash
-# 启动第一个TaskTracker，使用端口12001
+# 启动第一个TaskTracker
 java -cp target distributed.TaskTracker 9002
 
-# 启动第二个TaskTracker，使用端口12002
+# 启动第二个TaskTracker
 java -cp target distributed.TaskTracker 9003
 
 ```
@@ -73,13 +72,19 @@ java -cp target distributed.TaskTracker 9003
 
 ```bash
 cd /home/apricity/workspace/MapReduce
+java -cp target client.Client <inputPath> <outputPath> <mapperClass> <reducerClass> <numReducers> [combinerClass] [jobTrackerPort]
+```
+
+基本示例：
+```bash
 java -cp target client.Client input.txt output udf.WordCountMapper udf.WordCountReducer 3 
 ```
 
-例如，JobTracker使用端口9001：
+使用Combiner进行本地聚合：
 ```bash
-java -cp target client.Client input.txt output udf.WordCountMapper udf.WordCountReducer 4
+java -cp target client.Client input.txt output udf.WordCountMapper udf.WordCountReducer 3 udf.WordCountCombiner
 ```
+
 
 ## 如何实现自定义的MapReduce程序
 
@@ -94,25 +99,3 @@ java -cp target client.Client input.txt output udf.WordCountMapper udf.WordCount
 - `udf.WordCountMapper`：实现单词分割和计数
 - `udf.WordCountReducer`：实现单词计数汇总
 
-## 输入文件格式
-
-输入文件应为文本文件，每行作为一个记录进行处理。
-
-## 输出结果查看
-
-作业完成后，可以在指定的输出目录查看结果。对于WordCount应用，输出格式为：
-
-```
-word1  count1
-word2  count2
-...
-```
-
-## 注意事项
-
-1. JobTracker和TaskTracker需要在不同的终端运行
-2. 确保输入文件存在，且有读取权限
-3. 如遇到"Address already in use"错误，可以通过命令行参数指定不同的端口：
-   - 对于JobTracker：`java -cp target distributed.JobTracker [端口号]`
-   - 对于TaskTracker：`java -cp target distributed.TaskTracker [taskTracker端口] [jobTracker端口]`
-   - 对于Client：`java -cp target client.Client [输入] [输出] [mapper] [reducer] [reducers数量] [jobTracker端口]`

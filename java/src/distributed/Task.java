@@ -20,6 +20,7 @@ public class Task implements Serializable {
     private int partitionId;
     private String mapperClass;
     private String reducerClass;
+    private String combinerClass;
     private int numReducers;
     private String status = PENDING;
     private String assignedTrackerId;  // 记录当前执行这个任务的TaskTracker
@@ -33,7 +34,15 @@ public class Task implements Serializable {
         this.outputPath = outputPath;
         this.mapperClass = mapperClass;
         this.reducerClass = reducerClass;
+        this.combinerClass = null;  // 默认不使用Combiner
         this.numReducers = numReducers;
+    }
+    
+    // MAP Task with Combiner
+    public Task(String taskId, String inputPath, String outputPath, String mapperClass, 
+                String reducerClass, String combinerClass, int numReducers) {
+        this(taskId, inputPath, outputPath, mapperClass, reducerClass, numReducers);
+        this.combinerClass = combinerClass;
     }
     
     // REDUCE Task
@@ -73,6 +82,14 @@ public class Task implements Serializable {
     
     public String getReducerClass() {
         return reducerClass;
+    }
+    
+    public String getCombinerClass() {
+        return combinerClass;
+    }
+    
+    public boolean hasCombiner() {
+        return combinerClass != null && !combinerClass.isEmpty();
     }
     
     public int getNumReducers() {

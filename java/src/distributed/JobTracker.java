@@ -39,50 +39,45 @@ public class JobTracker {
     }
     
     private void startTaskTrackerMonitor() {
-        taskTrackerMonitor = new Timer(true); // 创建一个守护线程定时器
+        taskTrackerMonitor = new Timer(true); // 守护线程定时器
         taskTrackerMonitor.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                checkTaskTrackers();
+                long now = System.currentTimeMillis();
+                List<String> deadTrackers = new ArrayList<>();
+                for (Map.Entry<String, HeartbeatMessage> entry : taskTrackers.entrySet()) {
+                    String trackerId = entry.getKey();
+                    HeartbeatMessage lastHeartbeat = entry.getValue();
+                    // 判断是否超时
+                    if (now - lastHeartbeat.getTimestamp() > HEARTBEAT_TIMEOUT) {
+                        System.out.println("TaskTracker " + trackerId + " appears to be dead. Last heartbeat: " + new Date(lastHeartbeat.getTimestamp()));
+                        deadTrackers.add(trackerId);
+                    }
+                }
+                // 从活跃的TaskTracker列表中移除死掉的节点
+                for (String trackerId : deadTrackers) {
+                    taskTrackers.remove(trackerId);
+                    taskTrackerPorts.remove(trackerId);
+                    System.out.println("Removed dead TaskTracker: " + trackerId);
+                    // 找出分配给该TaskTracker的所有任务
+                    List<String> tasksToReassign = new ArrayList<>();
+                    for (Map.Entry<String, String> entry : taskAssignments.entrySet()) {
+                        if (entry.getValue().equals(trackerId)) {
+                            tasksToReassign.add(entry.getKey());
+                        }
+                    }
+                    // 清理任务分配记录并重置任务状态为PENDING
+                    for (String taskId : tasksToReassign) {
+                        taskAssignments.remove(taskId);
+                        Task task = tasks.get(taskId);
+                        if (task != null && !completedTasks.contains(taskId)) {
+                            task.setStatus(Task.PENDING);
+                            task.setAssignedTrackerId(null);
+                        }
+                    }
+                }
             }
         }, HEARTBEAT_TIMEOUT, HEARTBEAT_TIMEOUT);
-        // System.out.println("TaskTracker monitor started");
-    }
-    
-    private void checkTaskTrackers() {
-        long now = System.currentTimeMillis();
-        List<String> deadTrackers = new ArrayList<>();
-        for (Map.Entry<String, HeartbeatMessage> entry : taskTrackers.entrySet()) {
-            String trackerId = entry.getKey();
-            HeartbeatMessage lastHeartbeat = entry.getValue();
-            if (now - lastHeartbeat.getTimestamp() > HEARTBEAT_TIMEOUT) {
-                System.out.println("TaskTracker " + trackerId + " appears to be dead. Last heartbeat: " + new Date(lastHeartbeat.getTimestamp()));
-                deadTrackers.add(trackerId);
-            }
-        }
-        // 从活跃TaskTracker列表中移除死掉的节点
-        for (String trackerId : deadTrackers) {
-            taskTrackers.remove(trackerId);
-            taskTrackerPorts.remove(trackerId);
-            System.out.println("Removed dead TaskTracker: " + trackerId);
-            // 找出分配给该TaskTracker的所有任务
-            List<String> tasksToReassign = new ArrayList<>();
-            for (Map.Entry<String, String> entry : taskAssignments.entrySet()) {
-                if (entry.getValue().equals(trackerId)) {
-                    tasksToReassign.add(entry.getKey());
-                }
-            }
-            // 清理任务分配记录并重置任务状态为PENDING
-            for (String taskId : tasksToReassign) {
-                taskAssignments.remove(taskId);
-                Task task = tasks.get(taskId);
-                if (task != null && !completedTasks.contains(taskId)) {
-                    task.setStatus(Task.PENDING);
-                    task.setAssignedTrackerId(null);
-                }
-            }
-            // 后续可以添加任务重新分配的逻辑
-        }
     }
     
     public void start() {
@@ -122,16 +117,49 @@ public class JobTracker {
         job.setStatus(Job.JobStatus.RUNNING);
         jobs.put(job.getJobId(), job);
         jobToTasks.put(job.getJobId(), new ArrayList<>());
+        // 清理输出目录和中间结果目录
+        String outputPath = job.getOutputPath();
+        String intermediateDir = outputPath + "/intermediate";
+        String outputDir = outputPath + "/output";
+        // 先检查目录是否存在，如果不存在则创建
+        File intermediateFile = new File(intermediateDir);
+        File outputFile = new File(outputDir);
+        if (!intermediateFile.exists()) {
+            intermediateFile.mkdirs();
+        } else {
+            FileUtils.cleanDirectory(intermediateDir);
+        }
+        if (!outputFile.exists()) {
+            outputFile.mkdirs();
+        } else {
+            FileUtils.cleanDirectory(outputDir);
+        } 
         
-        // 将输入文件分割成多个splits
-        List<String> inputSplits = InputSplitter.splitInputFile(job.getInputPath(), 3); // 默认3个splits
+        List<String> inputSplits;
+        // if (job.hasSpecifiedMapTasks()) {
+        //     // 使用用户设置的Map任务数量
+        //     inputSplits = InputSplitter.splitInputFile(job.getInputPath(), job.getNumMapTasks());
+        //     System.out.println("Using user-specified map task count: " + job.getNumMapTasks());
+        // } else {
+        //     // 根据文件大小自动确定Map任务数量
+        //     inputSplits = InputSplitter.autoSplitInputFile(job.getInputPath());
+        //     System.out.println("Automatically determined map task count: " + inputSplits.size());
+        // }
+        // 根据文件大小自动确定Map任务数量
+        inputSplits = InputSplitter.autoSplitInputFile(job.getInputPath());
+        System.out.println("Automatically determined map task count: " + inputSplits.size());
+        System.out.println("Job " + job.getJobId() + " will start reduce tasks when " + String.format("%.1f%%", job.getReduceStartThreshold() * 100) + " of map tasks are completed");
         // 创建并分配Map任务
         for (int i = 0; i < inputSplits.size(); i++) {
             String taskId = "map_" + job.getJobId() + "_" + i;
-            String intermediateDir = job.getOutputPath() + "/intermediate";
-            FileUtils.createIntermediateDir(job.getOutputPath());
-            Task mapTask = new Task(taskId, inputSplits.get(i), intermediateDir,
-                                   job.getMapperClass(), job.getReducerClass(), job.getNumReducers());
+            Task mapTask;
+            if (job.hasCombiner()) {
+                // 有Combiner
+                mapTask = new Task(taskId, inputSplits.get(i), intermediateDir, job.getMapperClass(), job.getReducerClass(), job.getCombinerClass(), job.getNumReducers());
+                System.out.println("Created map task with combiner: " + job.getCombinerClass());
+            } else {
+                mapTask = new Task(taskId, inputSplits.get(i), intermediateDir, job.getMapperClass(), job.getReducerClass(), job.getNumReducers());
+            }
             mapTask.setStatus(Task.PENDING);
             tasks.put(taskId, mapTask);
             taskToJob.put(taskId, job.getJobId());
@@ -150,9 +178,9 @@ public class JobTracker {
             return;
         }
         try {
-            String taskTrackerId = getIdleTaskTracker(); // 先找到一个空闲的TaskTracker
+            String taskTrackerId = getLeastLoadedTaskTracker(); // 找到负载最小的TaskTracker
             if (taskTrackerId != null) {
-                int port = getTaskTrackerPort(taskTrackerId);
+                int port = taskTrackerPorts.get(taskTrackerId);
                 if (port > 0) {
                     task.setAssignedTrackerId(taskTrackerId);
                     task.setStatus(Task.RUNNING);
@@ -186,12 +214,10 @@ public class JobTracker {
             } else if (status.equals("FAILED")) {
                 task.setStatus(Task.FAILED);
             }
-            // System.out.println("Updated task status: " + task);
         }
         if (status.equals("COMPLETED")) {
             // 任务完成后清理任务分配记录
             if (taskAssignments.containsKey(taskId)) {
-                // System.out.println("Task " + taskId + " completed, removing assignment record");
                 taskAssignments.remove(taskId);
             }
             String jobId = taskToJob.get(taskId);
@@ -214,69 +240,57 @@ public class JobTracker {
         taskTrackers.put(taskTrackerId, heartbeat);
         // 更新TaskTracker的端口映射
         taskTrackerPorts.put(taskTrackerId, port);
-        System.out.println("Received heartbeat from " + taskTrackerId + 
-                          ", port: " + port +
-                          ", available slots: " + (heartbeat.hasAvailableSlot() ? "YES" : "NO") + 
-                          ", tasks: " + heartbeat.getRunningTasksNum() + "/" + heartbeat.getMaxTasksNum());
-        
-        // 处理任务状态更新
-        for (Map.Entry<String, String> entry : heartbeat.getTaskStatus().entrySet()) {
-            String taskId = entry.getKey();
-            String status = entry.getValue();
-            // 只有在任务已完成时才更新状态
-            if (status.equals("COMPLETED") && tasks.containsKey(taskId) && !completedTasks.contains(taskId)) {
-                Task task = tasks.get(taskId);
-                task.setStatus(Task.COMPLETED);
-                completedTasks.add(taskId); // 添加到已完成任务集合
-                // 创建一个完成状态的报告
-                StatusReport taskReport = new StatusReport(
-                    taskId,
-                    "COMPLETED",
-                    1.0,
-                    "Task completed according to heartbeat"
-                );
-                taskStatus.put(taskId, taskReport);
-                // System.out.println("Updated task status from heartbeat: " + taskId + " -> COMPLETED");
-                // 检查是否需要调度后续任务
-                String jobId = taskToJob.get(taskId);
-                if (jobId != null && task.getType().equals(Task.MAP)) {
-                    checkAndScheduleReduceTasks(jobId);
-                } else if (jobId != null && task.getType().equals(Task.REDUCE)) {
-                    checkJobCompletion(jobId);
-                }
-                // 任务完成后清理任务分配记录
-                if (taskAssignments.containsKey(taskId)) {
-                    taskAssignments.remove(taskId);
-                }
-            }
-        }
-        if (heartbeat.hasAvailableSlot()) {
-            assignPendingTasks(taskTrackerId);
-        }
+        System.out.println("Received heartbeat from " + taskTrackerId +  ", port: " + port + ", available slots: " + (heartbeat.hasAvailableSlot() ? "YES" : "NO") + ", tasks: " + heartbeat.getRunningTasksNum() + "/" + heartbeat.getMaxTasksNum());
+        // // 处理该从节点的每一个任务状态的更新
+        // for (Map.Entry<String, String> entry : heartbeat.getTaskStatus().entrySet()) {
+        //     String taskId = entry.getKey();
+        //     String status = entry.getValue();
+        //     // 只有在任务已完成时才更新状态
+        //     if (status.equals("COMPLETED") && tasks.containsKey(taskId) && !completedTasks.contains(taskId)) {
+        //         Task task = tasks.get(taskId);
+        //         task.setStatus(Task.COMPLETED);
+        //         completedTasks.add(taskId);
+        //         StatusReport taskReport = new StatusReport(
+        //             taskId,
+        //             "COMPLETED",
+        //             1.0,
+        //             "Task completed according to heartbeat"
+        //         );
+        //         taskStatus.put(taskId, taskReport);
+        //         String jobId = taskToJob.get(taskId);
+        //         if (jobId != null && task.getType().equals(Task.MAP)) {
+        //             checkAndScheduleReduceTasks(jobId);
+        //         } else if (jobId != null && task.getType().equals(Task.REDUCE)) {
+        //             checkJobCompletion(jobId);
+        //         }
+        //         // 任务完成后清理任务分配记录
+        //         if (taskAssignments.containsKey(taskId)) {
+        //             taskAssignments.remove(taskId);
+        //         }
+        //     }
+        // }
+        // if (heartbeat.hasAvailableSlot()) {
+        //     assignPendingTasks(taskTrackerId);
+        // }
     }
     
-
     // 为TaskTracker分配待处理的任务
     private void assignPendingTasks(String taskTrackerId) {
-        // 优先分配Map任务，然后再分配Reduce任务
         List<Task> pendingTasks = getPendingTasks();
         HeartbeatMessage heartbeat = taskTrackers.get(taskTrackerId);
         int availableSlots = heartbeat.getMaxTasksNum() - heartbeat.getRunningTasksNum();
-        
         for (Task task : pendingTasks) {
             if (availableSlots <= 0) {
-                break; // 没有更多的可用槽位
+                break; 
             }
             // 如果任务未被分配且未完成，则分配给TaskTracker
             String taskId = task.getTaskId();
             if (!taskAssignments.containsKey(taskId) && !completedTasks.contains(taskId)) {
                 try {
-                    int port = getTaskTrackerPort(taskTrackerId);
-                    // 设置任务分配信息
+                    int port = taskTrackerPorts.get(taskTrackerId);
                     task.setAssignedTrackerId(taskTrackerId);
                     task.setStatus(Task.RUNNING);
                     NetworkUtils.sendObject(task, NetworkUtils.LOCALHOST, port);
-                    // 记录任务分配情况
                     taskAssignments.put(taskId, taskTrackerId);
                     System.out.println("Assigned " + task.getType() + " task: " + taskId + " to TaskTracker at port " + port);
                     availableSlots--; // 减少可用槽位
@@ -290,14 +304,11 @@ public class JobTracker {
     // 获取所有待处理的任务
     private List<Task> getPendingTasks() {
         List<Task> pendingTasks = new ArrayList<>();
-        
-        // 首先考虑所有Map任务
         for (Task task : tasks.values()) {
             if (task.getType().equals(Task.MAP) && task.getStatus().equals(Task.PENDING) && !completedTasks.contains(task.getTaskId()) && !taskAssignments.containsKey(task.getTaskId())) {
                 pendingTasks.add(task);
             }
         }
-        // 如果所有Map任务已经分配或完成，再考虑Reduce任务
         if (pendingTasks.isEmpty()) {
             for (Task task : tasks.values()) {
                 if (task.getType().equals(Task.REDUCE) && task.getStatus().equals(Task.PENDING) && !completedTasks.contains(task.getTaskId()) && !taskAssignments.containsKey(task.getTaskId())) {
@@ -309,23 +320,29 @@ public class JobTracker {
     }
     
     private void checkAndScheduleReduceTasks(String jobId) {
-        // 检查所有Map任务是否都已完成
-        boolean allMapTasksCompleted = true;
-        for (String id : jobToTasks.get(jobId)) {
-            Task t = tasks.get(id);
-            if (t.getType().equals(Task.MAP) && !completedTasks.contains(id)) {
-                if (!t.getStatus().equals(Task.COMPLETED)) {
-                    allMapTasksCompleted = false;
-                    break;
+        Job job = jobs.get(jobId);
+        float reduceStartThreshold = job.getReduceStartThreshold();
+        // 计算已完成的Map任务数和总Map任务数
+        int completedMapTasks = 0;
+        int totalMapTasks = 0;
+        for (String taskId : jobToTasks.get(jobId)) {
+            Task t = tasks.get(taskId);
+            if (t.getType().equals(Task.MAP)) {
+                totalMapTasks++;
+                if (completedTasks.contains(taskId) || t.getStatus().equals(Task.COMPLETED)) {
+                    completedMapTasks++;
                 }
             }
         }
-        if (allMapTasksCompleted) {
-            Job job = jobs.get(jobId);
+        // 计算Map任务完成率
+        float completionRate = totalMapTasks > 0 ? (float)completedMapTasks / totalMapTasks : 0;
+        System.out.println("Map tasks completion rate for job " + jobId + ": " + String.format("%.1f%%", completionRate * 100) + " (" + completedMapTasks + "/" + totalMapTasks + ")");
+        // 检查是否达到启动Reduce任务的阈值
+        if (completionRate >= reduceStartThreshold) {
+            System.out.println("Map completion rate reached threshold: " + String.format("%.1f%%", reduceStartThreshold * 100) +  ", scheduling Reduce tasks for job " + jobId);                 
             int numReducers = job.getNumReducers();
             String intermediateDir = job.getOutputPath() + "/intermediate";
             String outputDir = job.getOutputPath() + "/output";
-            
             // 创建Reduce任务
             for (int i = 0; i < numReducers; i++) {
                 String reduceTaskId = "reduce_" + jobId + "_" + i;
@@ -368,26 +385,21 @@ public class JobTracker {
             System.out.println("All tasks for job " + jobId + " have completed successfully!");
         }
     }
-    // 获取一个可以执行任务TaskTracker
-    private String getIdleTaskTracker() {
+
+    private String getLeastLoadedTaskTracker() {
+        String selected = null;
+        double minLoad = Double.MAX_VALUE;
         for (Map.Entry<String, HeartbeatMessage> entry : taskTrackers.entrySet()) {
-            // 使用HeartbeatMessage中的状态来判断TaskTracker是否空闲
             HeartbeatMessage report = entry.getValue();
             if (report.hasAvailableSlot()) {
-                return entry.getKey();
+                double load = (double) report.getRunningTasksNum() / report.getMaxTasksNum();
+                if (load < minLoad) {
+                    minLoad = load;
+                    selected = entry.getKey();
+                }
             }
         }
-        return null;
-    }
-
-    // 获取TaskTracker的端口号
-    private int getTaskTrackerPort(String taskTrackerId) {
-        Integer port = taskTrackerPorts.get(taskTrackerId);
-        if (port == null) {
-            System.err.println("No port mapping for TaskTracker ID: " + taskTrackerId);
-            return -1;
-        }
-        return port;
+        return selected;
     }
 
     public static void main(String[] args) {

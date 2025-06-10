@@ -10,7 +10,7 @@ import java.util.concurrent.*;
 public class TaskTracker {
     private int port;
     private ServerSocket serverSocket;
-    private ExecutorService executorService; // 线程池：TaskTracker可以并发执行多个Map或Reduce任务
+    private ExecutorService executorService;      // 线程池：TaskTracker可以并发执行多个Map或Reduce任务
     private Map<String, Future<?>> runningTasks;  // taskId -> Future
     private Set<String> completedTasks;  // 已完成任务的ID集合
     private String taskTrackerId;
@@ -18,12 +18,11 @@ public class TaskTracker {
     private Timer taskCleanupTimer; // 定时器用于清理已完成的任务
     private String jobTrackerHost = NetworkUtils.LOCALHOST;
     private int jobTrackerPort = NetworkUtils.JOB_TRACKER_PORT;
-    private boolean busy = false;
     private static final long TASK_CLEANUP_INTERVAL = 10000; // 10秒清理一次已完成任务
     
     public TaskTracker(int port) {
         this.port = port;
-        this.taskTrackerId = "TaskTracker-" + port;  // 使用端口号作为唯一标识符
+        this.taskTrackerId = "TaskTracker-" + port;
         this.executorService = Executors.newFixedThreadPool(5);  // 最多同时执行5个任务
         this.runningTasks = new ConcurrentHashMap<>();
         this.completedTasks = Collections.synchronizedSet(new HashSet<>());
@@ -50,7 +49,6 @@ public class TaskTracker {
                     if (obj instanceof Task) {
                         Task task = (Task) obj;
                         System.out.println("Received task: " + task);
-                        busy = true;  // 标记TaskTracker为忙碌状态
                         executeTask(task);
                     } else {
                         System.err.println("Unknown request type: " + obj.getClass().getName());
@@ -100,21 +98,17 @@ public class TaskTracker {
     // 清理已完成的任务
     private void cleanupCompletedTasks() {
         List<String> tasksToRemove = new ArrayList<>();
-        
         for (Map.Entry<String, Future<?>> entry : runningTasks.entrySet()) {
             String taskId = entry.getKey();
             Future<?> future = entry.getValue();
-            
             if (future.isDone() || future.isCancelled() || completedTasks.contains(taskId)) {
                 tasksToRemove.add(taskId);
             }
         }
-        
         for (String taskId : tasksToRemove) {
             runningTasks.remove(taskId);
             System.out.println("Cleaned up completed task: " + taskId);
         }
-        
         if (!tasksToRemove.isEmpty()) {
             System.out.println("Cleaned up " + tasksToRemove.size() + " completed tasks. Current running tasks: " + runningTasks.size());
         }
@@ -122,16 +116,13 @@ public class TaskTracker {
     
     private void sendHeartbeat() {
         try {
-            // 在发送心跳前清理已完成的任务
             cleanupCompletedTasks();
-            
             HeartbeatMessage heartbeat = new HeartbeatMessage(
                 taskTrackerId, 
                 runningTasks.size(), 
-                5,  // 最大任务数为5
-                port  // 发送当前TaskTracker的端口号
+                5,
+                port
             );
-            // 添加当前正在执行的任务状态
             for (Map.Entry<String, Future<?>> entry : runningTasks.entrySet()) {
                 String taskId = entry.getKey();
                 Future<?> future = entry.getValue();
@@ -148,7 +139,6 @@ public class TaskTracker {
     private void executeTask(final Task task) {
         Future<?> future = executorService.submit(() -> {
             try {
-                // 更新任务状态为运行中
                 task.setStatus(Task.RUNNING);
                 sendStatusReport(task.getTaskId(), "STARTED", 0.0, "Task started");
                 if (task.getType().equals(Task.MAP)) {
@@ -158,16 +148,12 @@ public class TaskTracker {
                 } else {
                     throw new RuntimeException("Unknown task type: " + task.getType());
                 }
-                // 更新任务状态为已完成
                 task.setStatus(Task.COMPLETED);
                 sendStatusReport(task.getTaskId(), "COMPLETED", 1.0, "Task completed");
-                
-                // 标记任务已完成，等待清理
                 completedTasks.add(task.getTaskId());
             } catch (Exception e) {
                 System.err.println("Task execution failed: " + e.getMessage());
                 e.printStackTrace();
-                // 更新任务状态为失败
                 task.setStatus(Task.FAILED);
                 try {
                     sendStatusReport(task.getTaskId(), "FAILED", 0.0, e.getMessage());
@@ -177,7 +163,6 @@ public class TaskTracker {
                 }
             }
         });
-        
         runningTasks.put(task.getTaskId(), future);
     }
     
@@ -187,36 +172,114 @@ public class TaskTracker {
         int numReducers = task.getNumReducers();
         // 动态加载Mapper类
         Mapper<Object, Object> mapper = loadMapper(task.getMapperClass());
-        // 创建输出目录
-        new File(outputPath).mkdirs();
-        // 为每个Reducer创建一个中间输出文件
+        // 检查是否有Combiner
+        Combiner<Object, Object, Object, Object> combiner = null;
+        if (task.getCombinerClass() != null && !task.getCombinerClass().isEmpty()) {
+            combiner = loadCombiner(task.getCombinerClass());
+            System.out.println("Using Combiner: " + task.getCombinerClass());
+        }
+        String mapTaskId = task.getTaskId();
+        String mapTaskIndex = mapTaskId.substring(mapTaskId.lastIndexOf('_') + 1);
+        // 为当前Map任务创建专用输出目录
+        String mapOutputDir = outputPath + "/map-" + mapTaskIndex;
+        new File(mapOutputDir).mkdirs();
+        // 为每个分区创建一个输出文件
         BufferedWriter[] writers = new BufferedWriter[numReducers];
         for (int i = 0; i < numReducers; i++) {
-            writers[i] = new BufferedWriter(new FileWriter(outputPath + "/part-" + i + ".txt"));
+            writers[i] = new BufferedWriter(new FileWriter(mapOutputDir + "/part-" + i + ".txt"));
         }
-        // 读取输入文件并执行map
-        try (BufferedReader reader = new BufferedReader(new FileReader(inputPath))) {
-            String line;
+        List<String> lines = new ArrayList<>();
+        int totalLines;
+        try {
+            System.out.println("Reading from logical split: " + inputPath);
+            lines = distributed.utils.InputSplitter.readSplit(inputPath);
+            totalLines = lines.size();
             int lineCount = 0;
-            int totalLines = countLines(inputPath);
-            
-            while ((line = reader.readLine()) != null) {
-                List<Pair<Object, Object>> results = mapper.map(line);
-                // 将结果写入对应的中间文件（按key的hash分区）
-                for (Pair<Object, Object> pair : results) {
-                    String key = pair.getKey().toString();
-                    int partition = PartitionUtils.getPartition(key, numReducers);
-                    writers[partition].write(key + "\t" + pair.getValue() + "\n");
+            // 如果有Combiner，先在内存中按key分组
+            Map<String, Map<Integer, List<Object>>> keyToValues = new HashMap<>();
+            if (combiner != null) {
+                for (String line : lines) {
+                    List<Pair<Object, Object>> results = mapper.map(line);
+                    // 按key和分区收集数据
+                    for (Pair<Object, Object> pair : results) {
+                        String key = pair.getKey().toString();
+                        int partition = PartitionUtils.getPartition(key, numReducers);
+                        if (!keyToValues.containsKey(key)) {
+                            keyToValues.put(key, new HashMap<>());
+                        }
+                        if (!keyToValues.get(key).containsKey(partition)) {
+                            keyToValues.get(key).put(partition, new ArrayList<>());
+                        }
+                        keyToValues.get(key).get(partition).add(pair.getValue());
+                    }
+                    lineCount++;
+                    if (lineCount % 100 == 0 || lineCount == totalLines) {
+                        double progress = (double) lineCount / totalLines;
+                        sendStatusReport(task.getTaskId(), "RUNNING", progress, "Processed " + lineCount + "/" + totalLines + " lines");
+                    }
                 }
-                lineCount++;
-                if (lineCount % 100 == 0 || lineCount == totalLines) {
-                    double progress = (double) lineCount / totalLines;
-                    sendStatusReport(task.getTaskId(), "RUNNING", progress, 
-                                    "Processed " + lineCount + "/" + totalLines + " lines");
+                // 对每个分区中的键进行排序
+                for (int partition = 0; partition < numReducers; partition++) {
+                    Map<String, List<Object>> sortedPartitionMap = new HashMap<>();
+                    for (Map.Entry<String, Map<Integer, List<Object>>> entry : keyToValues.entrySet()) {
+                        String key = entry.getKey();
+                        Map<Integer, List<Object>> partitionMap = entry.getValue();
+                        if (partitionMap.containsKey(partition)) {
+                            sortedPartitionMap.put(key, partitionMap.get(partition));
+                        }
+                    }
+                    // 对键进行排序
+                    List<String> sortedKeys = new ArrayList<>(sortedPartitionMap.keySet());
+                    Collections.sort(sortedKeys);
+                    for (String key : sortedKeys) {
+                        List<Object> values = sortedPartitionMap.get(key);
+                        Pair<Object, Object> result = combiner.combine(key, values);
+                        writers[partition].write(result.getKey() + "\t" + result.getValue() + "\n");
+                    }
                 }
+                
+                System.out.println("Applied Combiner to " + keyToValues.size() + " unique keys with sorting");
+            } else {
+                // 没有Combiner
+                Map<Integer, Map<String, List<Object>>> partitionKeyValues = new HashMap<>();
+                for (int i = 0; i < numReducers; i++) {
+                    partitionKeyValues.put(i, new HashMap<>());
+                }
+                // 收集所有结果
+                for (String line : lines) {
+                    List<Pair<Object, Object>> results = mapper.map(line);
+                    for (Pair<Object, Object> pair : results) {
+                        String key = pair.getKey().toString();
+                        int partition = PartitionUtils.getPartition(key, numReducers);
+                        
+                        Map<String, List<Object>> partitionMap = partitionKeyValues.get(partition);
+                        if (!partitionMap.containsKey(key)) {
+                            partitionMap.put(key, new ArrayList<>());
+                        }
+                        partitionMap.get(key).add(pair.getValue());
+                    }
+                    lineCount++;
+                    if (lineCount % 100 == 0 || lineCount == totalLines) {
+                        double progress = (double) lineCount / totalLines;
+                        sendStatusReport(task.getTaskId(), "RUNNING", progress, "Processed " + lineCount + "/" + totalLines + " lines");
+                    }
+                }
+                // 对每个分区内的键进行排序并写入
+                for (int partition = 0; partition < numReducers; partition++) {
+                    Map<String, List<Object>> keyValues = partitionKeyValues.get(partition);
+                    List<String> sortedKeys = new ArrayList<>(keyValues.keySet());
+                    Collections.sort(sortedKeys);  // 键排序
+                    
+                    for (String key : sortedKeys) {
+                        for (Object value : keyValues.get(key)) {
+                            writers[partition].write(key + "\t" + value + "\n");
+                        }
+                    }
+                }
+                
+                System.out.println("Map task completed with sorting for " + mapTaskId);
             }
         } finally {
-            // 关闭所有writers
             for (BufferedWriter writer : writers) {
                 if (writer != null) {
                     writer.close();
@@ -231,47 +294,76 @@ public class TaskTracker {
         String outputDir = task.getOutputPath();
         // 动态加载Reducer类
         Reducer<Object, Object, Object, Object> reducer = loadReducer(task.getReducerClass());
-        // 创建输出目录
         new File(outputDir).mkdirs();
-        // 读取对应的中间结果文件
-        String inputPath = inputDir + "/part-" + partitionId + ".txt";
-        File inputFile = new File(inputPath);
-        if (!inputFile.exists()) {
-            System.out.println("No intermediate file for partition " + partitionId);
+        // 从所有Map任务中拉取对应分区的数据
+        System.out.println("Reducer " + task.getTaskId() + " fetching partition " + partitionId + " from all Map tasks");
+        File baseDir = new File(inputDir);
+        File[] mapDirs = baseDir.listFiles((dir, name) -> name.startsWith("map-"));
+        
+        if (mapDirs == null || mapDirs.length == 0) {
+            System.out.println("No map output directories found in " + inputDir);
             return;
         }
+        
         // 从中间结果读取key-value对并按key分组
         Map<String, List<Object>> keyToValues = new HashMap<>();
-        try (BufferedReader reader = new BufferedReader(new FileReader(inputFile))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                String[] parts = line.split("\t");
-                if (parts.length == 2) {
-                    String key = parts[0];
-                    // 对中间结果值进行解析，尝试转换为Integer
-                    Object value;
-                    try {
-                        value = Integer.parseInt(parts[1]);
-                    } catch (NumberFormatException e) {
-                        value = parts[1]; // 如果转换失败，保持字符串形式
+        // 从每个Map任务目录中拉取对应分区的数据
+        for (File mapDir : mapDirs) {
+            File partitionFile = new File(mapDir, "part-" + partitionId + ".txt");
+            if (!partitionFile.exists()) {
+                System.out.println("No partition file in " + mapDir.getPath() + " for partition " + partitionId);
+                continue;
+            }
+            System.out.println("Fetching data from " + partitionFile.getPath()); 
+            try (BufferedReader reader = new BufferedReader(new FileReader(partitionFile))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String[] parts = line.split("\t");
+                    if (parts.length == 2) {
+                        String key = parts[0];
+                        // 对中间结果值进行解析（可能会有其他类型的中间结果值）
+                        Object value;
+                        try {
+                            value = Integer.parseInt(parts[1]);
+                        } catch (NumberFormatException e) {
+                            value = parts[1];
+                        }
+                        if (!keyToValues.containsKey(key)) {
+                            keyToValues.put(key, new ArrayList<>());
+                        }
+                        keyToValues.get(key).add(value);
                     }
-                    
-                    if (!keyToValues.containsKey(key)) {
-                        keyToValues.put(key, new ArrayList<>());
-                    }
-                    keyToValues.get(key).add(value);
                 }
             }
         }
+        // 按键排序
+        System.out.println("Sorting keys before reduce for partition " + partitionId);
+        List<String> sortedKeys = new ArrayList<>(keyToValues.keySet());
+        Collections.sort(sortedKeys);  // 键排序
+        
         // 对每个key调用reduce方法
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputDir + "/part-" + partitionId + ".txt"))) {
             int keyCount = 0;
-            int totalKeys = keyToValues.size();
-            for (Map.Entry<String, List<Object>> entry : keyToValues.entrySet()) {
-                String key = entry.getKey();
-                List<Object> values = entry.getValue();
+            int totalKeys = sortedKeys.size();
+            
+            for (String key : sortedKeys) {
+                List<Object> values = keyToValues.get(key);
+                
+                // 确保值也是有序的（可选，但有些应用场景可能需要）
+                if (values.get(0) instanceof Comparable<?>) {
+                    try {
+                        // 使用安全的类型转换
+                        @SuppressWarnings("unchecked")
+                        List<Comparable<Object>> comparableValues = (List<Comparable<Object>>) (List<?>) values;
+                        Collections.sort(comparableValues, Comparator.naturalOrder());
+                    } catch (Exception e) {
+                        // 如果排序失败，就不排序，继续处理
+                        System.out.println("Warning: Could not sort values for key " + key);
+                    }
+                }
+                
                 Pair<Object, Object> result = reducer.reduce(key, values);
-                writer.write(result.getKey() + "\t" + result.getValue() + "\n");
+                writer.write(result.getKey() + "\t" + result.getValue() + "\n");                
                 keyCount++;
                 if (keyCount % 100 == 0 || keyCount == totalKeys) {
                     double progress = (double) keyCount / totalKeys;
@@ -293,14 +385,10 @@ public class TaskTracker {
         return (Reducer<Object, Object, Object, Object>) reducerClass.getDeclaredConstructor().newInstance();
     }
     
-    private int countLines(String filePath) throws IOException {
-        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
-            int count = 0;
-            while (reader.readLine() != null) {
-                count++;
-            }
-            return count;
-        }
+    @SuppressWarnings("unchecked")
+    private Combiner<Object, Object, Object, Object> loadCombiner(String className) throws Exception {
+        Class<?> combinerClass = Class.forName(className);
+        return (Combiner<Object, Object, Object, Object>) combinerClass.getDeclaredConstructor().newInstance();
     }
     
     private void sendStatusReport(String taskId, String status, double progress, String message) throws IOException {
@@ -312,7 +400,7 @@ public class TaskTracker {
     public static void main(String[] args) {
         if (args.length == 0) {
             System.err.println("Error: TaskTracker port");
-            System.exit(1);  // 非正常退出，表示参数错误
+            System.exit(1);
         }
         int port;
         try {

@@ -5,10 +5,10 @@ import java.net.*;
 
 // 网络通信工具类
 public class NetworkUtils {
-    // 默认端口配置
+
+    // Jobtracker地址和默认端口号
     public static int JOB_TRACKER_PORT = 9001;
     public static final String LOCALHOST = "127.0.0.1";
-    
     public static void setJobTrackerPort(int port) {
         JOB_TRACKER_PORT = port;
     }
@@ -17,7 +17,6 @@ public class NetworkUtils {
     public static void sendObject(Object obj, String host, int port) throws IOException {
         Socket socket = null;
         ObjectOutputStream out = null;
-        
         try {
             socket = new Socket(host, port);
             out = new ObjectOutputStream(socket.getOutputStream());
@@ -33,7 +32,6 @@ public class NetworkUtils {
     public static Object receiveObject(ServerSocket serverSocket) throws IOException, ClassNotFoundException {
         Socket socket = null;
         ObjectInputStream in = null;
-        
         try {
             socket = serverSocket.accept();
             in = new ObjectInputStream(socket.getInputStream());
