@@ -136,18 +136,19 @@ public class JobTracker {
         } 
         
         List<String> inputSplits;
-        // if (job.hasSpecifiedMapTasks()) {
-        //     // 使用用户设置的Map任务数量
-        //     inputSplits = InputSplitter.splitInputFile(job.getInputPath(), job.getNumMapTasks());
-        //     System.out.println("Using user-specified map task count: " + job.getNumMapTasks());
-        // } else {
-        //     // 根据文件大小自动确定Map任务数量
-        //     inputSplits = InputSplitter.autoSplitInputFile(job.getInputPath());
-        //     System.out.println("Automatically determined map task count: " + inputSplits.size());
-        // }
+        if (job.hasSpecifiedMapTasks()) {
+            // 使用用户设置的Map任务数量
+            inputSplits = InputSplitter.splitInputFile(job.getInputPath(), job.getNumMapTasks());
+            System.out.println("Using user-specified map task count: " + job.getNumMapTasks());
+        } else {
+            // 根据文件大小自动确定Map任务数量
+            inputSplits = InputSplitter.autoSplitInputFile(job.getInputPath());
+            System.out.println("Automatically determined map task count: " + inputSplits.size());
+        }
+
         // 根据文件大小自动确定Map任务数量
-        inputSplits = InputSplitter.autoSplitInputFile(job.getInputPath());
-        System.out.println("Automatically determined map task count: " + inputSplits.size());
+        // inputSplits = InputSplitter.autoSplitInputFile(job.getInputPath());
+        // System.out.println("Automatically determined map task count: " + inputSplits.size());
         System.out.println("Job " + job.getJobId() + " will start reduce tasks when " + String.format("%.1f%%", job.getReduceStartThreshold() * 100) + " of map tasks are completed");
         // 创建并分配Map任务
         for (int i = 0; i < inputSplits.size(); i++) {

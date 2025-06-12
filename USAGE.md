@@ -47,7 +47,7 @@ java -cp target distributed.JobTracker 9001
 
 ```bash
 cd /home/apricity/workspace/MapReduce
-java -cp target distributed.TaskTracker [taskTrackerPort]
+java -cp target distributed.TaskTracker <taskTrackerPort>
 ```
 
 例如，TaskTracker使用端口9002
@@ -72,7 +72,7 @@ java -cp target distributed.TaskTracker 9003
 
 ```bash
 cd /home/apricity/workspace/MapReduce
-java -cp target client.Client <inputPath> <outputPath> <mapperClass> <reducerClass> <numReducers> [combinerClass] [jobTrackerPort]
+java -cp target client.Client <inputPath> <outputPath> <mapperClass> <reducerClass> <numReducers> [combinerClass] [numMapTasks] [jobTrackerPort]
 ```
 
 基本示例：
@@ -85,6 +85,15 @@ java -cp target client.Client input.txt output udf.WordCountMapper udf.WordCount
 java -cp target client.Client input.txt output udf.WordCountMapper udf.WordCountReducer 3 udf.WordCountCombiner
 ```
 
+用户指定map任务数量：
+```bash
+java -cp target client.Client input.txt output udf.WordCountMapper udf.WordCountReducer 3 "" 5
+```
+
+Combiner+用户指定map任务数量：
+```bash
+java -cp target client.Client input.txt output udf.WordCountMapper udf.WordCountReducer 3 udf.WordCountCombiner 5
+```
 
 ## 如何实现自定义的MapReduce程序
 

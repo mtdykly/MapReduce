@@ -25,6 +25,7 @@ public class InputSplitter {
         return splitInputFile(inputPath, numSplits);
     }
 
+    // 根据用户指定的Map任务数量
     public static List<String> splitInputFile(String inputPath, int numSplits) {
         List<String> splits = new ArrayList<>();
         File inputFile = new File(inputPath);

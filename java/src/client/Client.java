@@ -17,7 +17,7 @@ public class Client {
         String reducerClass = args[3];
         int numReducers = Integer.parseInt(args[4]);
         String combinerClass = null;
-        // Integer numMapTasks = null; // 用户指定的Map任务数量(可选)
+        Integer numMapTasks = null; // 用户指定的Map任务数量(可选)
         
         if (args.length > 5) {
             // 检查是否提供了Combiner类
@@ -27,29 +27,29 @@ public class Client {
             }
         }
         
-        // // 检查是否提供了Map任务数量
-        // if (args.length > 6) {
-        //     if (args[6] != null && !args[6].trim().isEmpty() && !args[6].equals("\"\"") && !args[6].equals("''")) {
-        //         try {
-        //             numMapTasks = Integer.parseInt(args[6]);
-        //             System.out.println("Using specified number of Map tasks: " + numMapTasks);
-        //         } catch (NumberFormatException e) {
-        //             System.out.println("Invalid number of Map tasks, will use auto-determined value");
-        //         }
-        //     }
-        // }
+        // 检查是否提供了Map任务数量
+        if (args.length > 6) {
+            if (args[6] != null && !args[6].trim().isEmpty() && !args[6].equals("\"\"") && !args[6].equals("''")) {
+                try {
+                    numMapTasks = Integer.parseInt(args[6]);
+                    System.out.println("Using specified number of Map tasks: " + numMapTasks);
+                } catch (NumberFormatException e) {
+                    System.out.println("Invalid number of Map tasks, will use auto-determined value");
+                }
+            }
+        }
         
         // 检查是否提供了JobTracker端口
-        if (args.length > 6) {
-            int jobTrackerPort = Integer.parseInt(args[6]);
-            NetworkUtils.setJobTrackerPort(jobTrackerPort);
-            System.out.println("Using custom JobTracker port: " + jobTrackerPort);
-        }
-        // if (args.length > 7) {
-        //     int jobTrackerPort = Integer.parseInt(args[7]);
+        // if (args.length > 6) {
+        //     int jobTrackerPort = Integer.parseInt(args[6]);
         //     NetworkUtils.setJobTrackerPort(jobTrackerPort);
         //     System.out.println("Using custom JobTracker port: " + jobTrackerPort);
         // }
+        if (args.length > 7) {
+            int jobTrackerPort = Integer.parseInt(args[7]);
+            NetworkUtils.setJobTrackerPort(jobTrackerPort);
+            System.out.println("Using custom JobTracker port: " + jobTrackerPort);
+        }
         // 检查输入文件是否存在
         File inputFile = new File(inputPath);
         if (!inputFile.exists()) {
@@ -64,11 +64,22 @@ public class Client {
         
         // 创建并提交作业
         Job job;
-        if (combinerClass != null){
+        if (combinerClass != null && numMapTasks != null) {
+            // 有Combiner且指定了Map任务数量
+            job = new Job(inputPath, outputPath, mapperClass, reducerClass, combinerClass, numReducers, numMapTasks);
+            System.out.println("使用Combiner和指定的Map任务数量创建作业");
+        } else if (combinerClass != null) {
+            // 只有Combiner
             job = new Job(inputPath, outputPath, mapperClass, reducerClass, combinerClass, numReducers);
-        }else {
+            System.out.println("使用Combiner创建作业");
+        } else if (numMapTasks != null) {
+            // 只指定了Map任务数量
+            job = new Job(inputPath, outputPath, mapperClass, reducerClass, numReducers, numMapTasks);
+            System.out.println("使用指定的Map任务数量创建作业");
+        } else {
             // 基本配置
             job = new Job(inputPath, outputPath, mapperClass, reducerClass, numReducers);
+            System.out.println("使用基本配置创建作业");
         }
         
         System.out.println("Created job: " + job);

@@ -12,14 +12,14 @@ public class Job implements Serializable {
     private String reducerClass;
     private String combinerClass;
     private int numReducers;
-    // private Integer numMapTasks; // 用户指定的Map任务数量（可选）
+    private Integer numMapTasks; // 用户指定的Map任务数量（可选）
     private static final float REDUCE_START_THRESHOLD = 0.6f; // 60%的Map任务完成后启动Reduce
     public enum JobStatus {
         WAITING, RUNNING, COMPLETED, FAILED
     }
     private JobStatus status;
 
-    // 不带Combiner
+    // 不带Combiner和用户指定的Map任务数量
     public Job(String inputPath, String outputPath, String mapperClass, String reducerClass, int numReducers) {
         this.jobId = UUID.randomUUID().toString().substring(0, 8);
         this.inputPath = inputPath;
@@ -28,7 +28,7 @@ public class Job implements Serializable {
         this.reducerClass = reducerClass;
         this.combinerClass = null;
         this.numReducers = numReducers;
-        // this.numMapTasks = null;
+        this.numMapTasks = null;
         this.status = JobStatus.WAITING;
     }
     
@@ -38,17 +38,18 @@ public class Job implements Serializable {
         this.combinerClass = combinerClass;
     }
     
-    // 带有Map任务数量的构造函数
-    // public Job(String inputPath, String outputPath, String mapperClass, String reducerClass, int numReducers, Integer numMapTasks) {
-    //     this(inputPath, outputPath, mapperClass, reducerClass, numReducers);
-    //     this.numMapTasks = numMapTasks;
-    // }
+    // 带Map任务数量的构造函数
+    public Job(String inputPath, String outputPath, String mapperClass, String reducerClass, int numReducers, Integer numMapTasks) {
+        this(inputPath, outputPath, mapperClass, reducerClass, numReducers);
+        this.numMapTasks = numMapTasks;
+        System.out.println("^66666");
+    }
     
     // 完整参数的构造函数
-    // public Job(String inputPath, String outputPath, String mapperClass, String reducerClass, String combinerClass, int numReducers, Integer numMapTasks) {
-    //     this(inputPath, outputPath, mapperClass, reducerClass, combinerClass, numReducers);
-    //     this.numMapTasks = numMapTasks;
-    // }
+    public Job(String inputPath, String outputPath, String mapperClass, String reducerClass, String combinerClass, int numReducers, Integer numMapTasks) {
+        this(inputPath, outputPath, mapperClass, reducerClass, combinerClass, numReducers);
+        this.numMapTasks = numMapTasks;
+    }
     
     public String getJobId() {
         return jobId;
@@ -86,13 +87,13 @@ public class Job implements Serializable {
         return REDUCE_START_THRESHOLD;
     }
     
-    // public Integer getNumMapTasks() {
-    //     return numMapTasks;
-    // }
+    public Integer getNumMapTasks() {
+        return numMapTasks;
+    }
     
-    // public boolean hasSpecifiedMapTasks() {
-    //     return numMapTasks != null;
-    // }
+    public boolean hasSpecifiedMapTasks() {
+        return numMapTasks != null;
+    }
     
     public JobStatus getStatus() { return status; }
     
@@ -101,6 +102,7 @@ public class Job implements Serializable {
     @Override
     public String toString() {
         return "Job[" + jobId + ", status=" + status + ", input=" + inputPath + ", output=" + outputPath + ", mapper=" + mapperClass + ", reducer=" + reducerClass + 
-               (hasCombiner() ? ", combiner=" + combinerClass : "") + ", reducers=" + numReducers  + ", reduceStartThreshold=" + (int)(REDUCE_START_THRESHOLD * 100) + "%" + "]";
+               (hasCombiner() ? ", combiner=" + combinerClass : "") + ", reducers=" + numReducers  +   (hasSpecifiedMapTasks() ? ", numMapTasks=" + numMapTasks : "") +
+               ", reduceStartThreshold=" + (int)(REDUCE_START_THRESHOLD * 100) + "%" + "]";
     }
 }
