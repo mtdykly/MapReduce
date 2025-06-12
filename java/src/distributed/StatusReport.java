@@ -7,7 +7,7 @@ public class StatusReport implements Serializable {
     
     private String taskId;  // 任务ID
     private String status;  // "STARTED", "RUNNING", "COMPLETED", "FAILED"
-    private double progress; // 0.0 - 1.0
+    private double progress;
     private String message;
     private long timestamp;  // 消息发送时间戳
     

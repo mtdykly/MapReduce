@@ -3,6 +3,7 @@ package distributed;
 import java.io.Serializable;
 import java.util.UUID;
 
+// 将作业的描述信息封装成可序列化的Job类
 public class Job implements Serializable {
 
     private String jobId;
@@ -18,6 +19,8 @@ public class Job implements Serializable {
         WAITING, RUNNING, COMPLETED, FAILED
     }
     private JobStatus status;
+
+
 
     // 不带Combiner和用户指定的Map任务数量
     public Job(String inputPath, String outputPath, String mapperClass, String reducerClass, int numReducers) {

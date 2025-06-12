@@ -61,7 +61,6 @@ public class Client {
         if (!outputDir.exists()) {
             outputDir.mkdirs();
         }
-        
         // 创建并提交作业
         Job job;
         if (combinerClass != null && numMapTasks != null) {
@@ -81,7 +80,6 @@ public class Client {
             job = new Job(inputPath, outputPath, mapperClass, reducerClass, numReducers);
             System.out.println("使用基本配置创建作业");
         }
-        
         System.out.println("Created job: " + job);
         try {
             // 将作业发送给JobTracker

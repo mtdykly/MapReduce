@@ -11,7 +11,7 @@ public class TaskTracker {
     private int port;
     private ServerSocket serverSocket;
     private ExecutorService executorService;      // 线程池：TaskTracker可以并发执行多个Map或Reduce任务
-    private Map<String, Future<?>> runningTasks;  // taskId -> Future
+    private Map<String, Future<?>> runningTasks;  // taskId -> Future（异步执行任务的结果)
     private Set<String> completedTasks;  // 已完成任务的ID集合
     private String taskTrackerId;
     private Timer heartbeatTimer;   // 定时器周期性地向JobTracker发送心跳
@@ -78,12 +78,25 @@ public class TaskTracker {
         heartbeatTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                sendHeartbeat();
+                try {
+                    cleanupCompletedTasks();
+                    HeartbeatMessage heartbeat = new HeartbeatMessage(taskTrackerId, runningTasks.size(), 5,port);
+                    for (Map.Entry<String, Future<?>> entry : runningTasks.entrySet()) {
+                        String taskId = entry.getKey();
+                        Future<?> future = entry.getValue();
+                        String status = future.isDone() ? "COMPLETED" : "RUNNING";
+                        heartbeat.addTaskStatus(taskId, status);
+                    }
+                    NetworkUtils.sendObject(heartbeat, jobTrackerHost, jobTrackerPort);
+                    System.out.println("Sent heartbeat: " + heartbeat + ", running tasks: " + runningTasks.size() + "/5");
+                } catch (Exception e) {
+                    System.err.println("Failed to send heartbeat: " + e.getMessage());
+                }
             }
         }, 0, 10000); // 每10秒发送一次
         System.out.println("Heartbeat thread started");
     }
-    
+
     private void startTaskCleanup() {
         taskCleanupTimer = new Timer(true); // 守护线程
         taskCleanupTimer.scheduleAtFixedRate(new TimerTask() {
@@ -111,28 +124,6 @@ public class TaskTracker {
         }
         if (!tasksToRemove.isEmpty()) {
             System.out.println("Cleaned up " + tasksToRemove.size() + " completed tasks. Current running tasks: " + runningTasks.size());
-        }
-    }
-    
-    private void sendHeartbeat() {
-        try {
-            cleanupCompletedTasks();
-            HeartbeatMessage heartbeat = new HeartbeatMessage(
-                taskTrackerId, 
-                runningTasks.size(), 
-                5,
-                port
-            );
-            for (Map.Entry<String, Future<?>> entry : runningTasks.entrySet()) {
-                String taskId = entry.getKey();
-                Future<?> future = entry.getValue();
-                String status = future.isDone() ? "COMPLETED" : "RUNNING";
-                heartbeat.addTaskStatus(taskId, status);
-            }
-            NetworkUtils.sendObject(heartbeat, jobTrackerHost, jobTrackerPort);
-            System.out.println("Sent heartbeat: " + heartbeat + ", running tasks: " + runningTasks.size() + "/5");
-        } catch (Exception e) {
-            System.err.println("Failed to send heartbeat: " + e.getMessage());
         }
     }
 
@@ -220,6 +211,7 @@ public class TaskTracker {
                 }
                 // 对每个分区中的键进行排序
                 for (int partition = 0; partition < numReducers; partition++) {
+                    // 收集键和对应的一组值
                     Map<String, List<Object>> sortedPartitionMap = new HashMap<>();
                     for (Map.Entry<String, Map<Integer, List<Object>>> entry : keyToValues.entrySet()) {
                         String key = entry.getKey();
@@ -237,7 +229,6 @@ public class TaskTracker {
                         writers[partition].write(result.getKey() + "\t" + result.getValue() + "\n");
                     }
                 }
-                
                 System.out.println("Applied Combiner to " + keyToValues.size() + " unique keys with sorting");
             } else {
                 // 没有Combiner
@@ -251,7 +242,6 @@ public class TaskTracker {
                     for (Pair<Object, Object> pair : results) {
                         String key = pair.getKey().toString();
                         int partition = PartitionUtils.getPartition(key, numReducers);
-                        
                         Map<String, List<Object>> partitionMap = partitionKeyValues.get(partition);
                         if (!partitionMap.containsKey(key)) {
                             partitionMap.put(key, new ArrayList<>());
@@ -269,14 +259,12 @@ public class TaskTracker {
                     Map<String, List<Object>> keyValues = partitionKeyValues.get(partition);
                     List<String> sortedKeys = new ArrayList<>(keyValues.keySet());
                     Collections.sort(sortedKeys);  // 键排序
-                    
                     for (String key : sortedKeys) {
                         for (Object value : keyValues.get(key)) {
                             writers[partition].write(key + "\t" + value + "\n");
                         }
                     }
-                }
-                
+                }    
                 System.out.println("Map task completed with sorting for " + mapTaskId);
             }
         } finally {
@@ -299,12 +287,10 @@ public class TaskTracker {
         System.out.println("Reducer " + task.getTaskId() + " fetching partition " + partitionId + " from all Map tasks");
         File baseDir = new File(inputDir);
         File[] mapDirs = baseDir.listFiles((dir, name) -> name.startsWith("map-"));
-        
         if (mapDirs == null || mapDirs.length == 0) {
             System.out.println("No map output directories found in " + inputDir);
             return;
         }
-        
         // 从中间结果读取key-value对并按key分组
         Map<String, List<Object>> keyToValues = new HashMap<>();
         // 从每个Map任务目录中拉取对应分区的数据
@@ -336,11 +322,9 @@ public class TaskTracker {
                 }
             }
         }
-        // 按键排序
         System.out.println("Sorting keys before reduce for partition " + partitionId);
         List<String> sortedKeys = new ArrayList<>(keyToValues.keySet());
         Collections.sort(sortedKeys);  // 键排序
-        
         // 对每个key调用reduce方法
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputDir + "/part-" + partitionId + ".txt"))) {
             int keyCount = 0;
@@ -348,20 +332,6 @@ public class TaskTracker {
             
             for (String key : sortedKeys) {
                 List<Object> values = keyToValues.get(key);
-                
-                // 确保值也是有序的（可选，但有些应用场景可能需要）
-                if (values.get(0) instanceof Comparable<?>) {
-                    try {
-                        // 使用安全的类型转换
-                        @SuppressWarnings("unchecked")
-                        List<Comparable<Object>> comparableValues = (List<Comparable<Object>>) (List<?>) values;
-                        Collections.sort(comparableValues, Comparator.naturalOrder());
-                    } catch (Exception e) {
-                        // 如果排序失败，就不排序，继续处理
-                        System.out.println("Warning: Could not sort values for key " + key);
-                    }
-                }
-                
                 Pair<Object, Object> result = reducer.reduce(key, values);
                 writer.write(result.getKey() + "\t" + result.getValue() + "\n");                
                 keyCount++;

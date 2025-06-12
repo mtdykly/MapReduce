@@ -75,6 +75,11 @@ public class JobTracker {
                             task.setAssignedTrackerId(null);
                         }
                     }
+                    // 重新分配这些任务
+                    if (!tasksToReassign.isEmpty()) {
+                        System.out.println("Rescheduling " + tasksToReassign.size() + " tasks from dead TaskTracker");
+                        assignPendingTasks();
+                    }
                 }
             }
         }, HEARTBEAT_TIMEOUT, HEARTBEAT_TIMEOUT);
@@ -170,7 +175,6 @@ public class JobTracker {
         }
     }
     
-
     // 分配任务给TaskTracker
     private void assignTask(Task task) {
         String taskId = task.getTaskId();
@@ -228,10 +232,24 @@ public class JobTracker {
                 checkJobCompletion(jobId);
             }
         } else if (status.equals("FAILED")) {
+            // 任务分配记录中移除
+            if (taskAssignments.containsKey(taskId)) {
+                taskAssignments.remove(taskId);
+            }
             String jobId = taskToJob.get(taskId);
-            Job job = jobs.get(jobId);
-            job.setStatus(Job.JobStatus.FAILED);
-            System.err.println("Job failed: " + jobId + ", due to task: " + taskId);
+            if (task != null) {
+                task.setStatus(Task.PENDING); // 设置任务为PENDING状态
+                task.setAssignedTrackerId(null);
+                System.out.println("Task " + taskId + " failed, resetting to PENDING for retry");
+                assignTask(task);// 立即尝试重新分配任务
+            } else {
+                // 无法获取任务信息，标记作业失败
+                Job job = jobs.get(jobId);
+                if (job != null) {
+                    job.setStatus(Job.JobStatus.FAILED);
+                    System.err.println("Job failed: " + jobId + ", due to task: " + taskId);
+                }
+            }
         }
     }
     
@@ -275,26 +293,24 @@ public class JobTracker {
         // }
     }
     
-    // 为TaskTracker分配待处理的任务
-    private void assignPendingTasks(String taskTrackerId) {
+    // 为待处理的任务分配处理它的tasktracker
+    private void assignPendingTasks() {
         List<Task> pendingTasks = getPendingTasks();
-        HeartbeatMessage heartbeat = taskTrackers.get(taskTrackerId);
-        int availableSlots = heartbeat.getMaxTasksNum() - heartbeat.getRunningTasksNum();
         for (Task task : pendingTasks) {
-            if (availableSlots <= 0) {
-                break; 
-            }
-            // 如果任务未被分配且未完成，则分配给TaskTracker
             String taskId = task.getTaskId();
             if (!taskAssignments.containsKey(taskId) && !completedTasks.contains(taskId)) {
                 try {
-                    int port = taskTrackerPorts.get(taskTrackerId);
-                    task.setAssignedTrackerId(taskTrackerId);
-                    task.setStatus(Task.RUNNING);
-                    NetworkUtils.sendObject(task, NetworkUtils.LOCALHOST, port);
-                    taskAssignments.put(taskId, taskTrackerId);
-                    System.out.println("Assigned " + task.getType() + " task: " + taskId + " to TaskTracker at port " + port);
-                    availableSlots--; // 减少可用槽位
+                    String taskTrackerId = getLeastLoadedTaskTracker(); // 找到负载最小的TaskTracker
+                    if (taskTrackerId != null) {
+                        int port = taskTrackerPorts.get(taskTrackerId);
+                        if (port > 0) {
+                            task.setAssignedTrackerId(taskTrackerId);
+                            task.setStatus(Task.RUNNING);
+                            NetworkUtils.sendObject(task, NetworkUtils.LOCALHOST, port);
+                            taskAssignments.put(taskId, taskTrackerId);
+                            System.out.println("Assigned " + task.getType() + " task: " + taskId + " to TaskTracker at port " + port);
+                        }
+                    }
                 } catch (Exception e) {
                     System.err.println("Failed to assign task " + taskId + ": " + e.getMessage());
                 }
@@ -347,7 +363,6 @@ public class JobTracker {
             // 创建Reduce任务
             for (int i = 0; i < numReducers; i++) {
                 String reduceTaskId = "reduce_" + jobId + "_" + i;
-                // 如果任务已经存在，跳过创建
                 if (tasks.containsKey(reduceTaskId)) {
                     continue;
                 }
@@ -358,12 +373,7 @@ public class JobTracker {
                 jobToTasks.get(jobId).add(reduceTaskId);
             }
             // 尝试分配Reduce任务
-            for (String taskTrackerId : taskTrackers.keySet()) {
-                HeartbeatMessage heartbeat = taskTrackers.get(taskTrackerId);
-                if (heartbeat.hasAvailableSlot()) {
-                    assignPendingTasks(taskTrackerId);
-                }
-            }
+            assignPendingTasks();
         }
     }
     

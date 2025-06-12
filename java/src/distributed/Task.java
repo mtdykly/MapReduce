@@ -25,7 +25,7 @@ public class Task implements Serializable {
     private String status = PENDING;
     private String assignedTrackerId;  // 记录当前执行这个任务的TaskTracker
     
-    // MAP Task
+    // MAP Task without Combiner
     public Task(String taskId, String inputPath, String outputPath, String mapperClass, 
                 String reducerClass, int numReducers) {
         this.taskId = taskId;
@@ -34,7 +34,7 @@ public class Task implements Serializable {
         this.outputPath = outputPath;
         this.mapperClass = mapperClass;
         this.reducerClass = reducerClass;
-        this.combinerClass = null;  // 默认不使用Combiner
+        this.combinerClass = null;
         this.numReducers = numReducers;
     }
     
