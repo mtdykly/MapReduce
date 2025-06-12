@@ -52,7 +52,7 @@
 
 ### 2.2 TaskTracker 模块 ( TaskTracker.java )
 
-`	TaskTracker` 作为 Worker 节点，主要承担以下职责：
+`TaskTracker` 作为 Worker 节点，主要承担以下职责：
 
 ##### 2.2.1.接收并执行任务（ `executeTask`)
 
